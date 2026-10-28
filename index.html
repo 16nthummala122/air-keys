@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Air Keys</title>
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #05050f;
+  color: white;
+  font-family: "Segoe UI", Arial, sans-serif;
+  overflow: hidden;
+}
+
+#app { position: relative; width: 100vw; height: 100vh; }
+
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+#cam { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+#side {
+  position: absolute; top: 16px; right: 16px; width: 190px; padding: 14px;
+  background: rgba(12, 12, 32, 0.72);
+  border: 1px solid rgba(0, 229, 255, 0.5);
+  border-radius: 16px;
+  box-shadow: 0 0 25px rgba(0, 229, 255, 0.25);
+  backdrop-filter: blur(6px);
+}
+#side h2 { font-size: 14px; letter-spacing: 3px; color: #00e5ff; text-align: center; }
+#nowPlaying {
+  margin: 8px 0 10px; min-height: 44px; text-align: center;
+  font-size: 18px; font-weight: 800; text-shadow: 0 0 12px #ff2bd6;
+}
+.group h3 {
+  margin: 8px 0 4px; font-size: 11px; letter-spacing: 2px;
+  text-transform: uppercase; color: #8f9bd6;
+}
+.key {
+  display: flex; justify-content: space-between; align-items: center;
+  margin: 3px 0; padding: 5px 10px; font-size: 13px; border-radius: 8px;
+  border-left: 4px solid var(--c);
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 0.55; transition: all 0.08s;
+}
+.key b { font-size: 15px; }
+.key span { font-size: 11px; color: #aab4e8; }
+.key.on {
+  opacity: 1; background: var(--c); color: #07071a;
+  box-shadow: 0 0 16px var(--c);
+  transform: translateX(-6px) scale(1.04);
+}
+.key.on span { color: #07071a; }
+
+#camToggle {
+  position: absolute; top: 16px; left: 16px; padding: 8px 14px;
+  font-size: 13px; font-weight: 600; color: white;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 10px; cursor: pointer;
+}
+
+.panel {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(90vw, 400px); padding: 30px 24px; text-align: center;
+  background: rgba(15, 15, 40, 0.92);
+  border: 2px solid #00e5ff; border-radius: 20px;
+  box-shadow: 0 0 35px rgba(0, 229, 255, 0.5);
+}
+.panel.hidden { display: none; }
+h1 { font-size: 46px; letter-spacing: 4px; }
+h1 span { color: #ff2bd6; text-shadow: 0 0 15px #ff2bd6; }
+.sub { margin: 8px 0 14px; color: #b8c4ff; }
+.panel ul { list-style: none; margin-bottom: 18px; text-align: left; line-height: 2; padding-left: 30px; }
+
+#startBtn {
+  width: 100%; padding: 14px; font-size: 18px; font-weight: 700; color: white;
+  background: linear-gradient(135deg, #00b4d8, #7b2ff7);
+  border: none; border-radius: 12px; cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+#startBtn:hover { transform: scale(1.04); box-shadow: 0 0 20px #7b2ff7; }
+#status { margin-top: 12px; min-height: 20px; font-size: 14px; color: #ffd166; }
+.tiny { margin-top: 8px; font-size: 11px; color: #7f8ab8; }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+
+<body>
+<div id="app">
+  <video id="cam" playsinline muted></video>
+  <canvas id="stage"></canvas>
+
+  <div id="side">
+    <h2>NOTES</h2>
+    <div id="nowPlaying">—</div>
+    <div class="group">
+      <h3>Left hand</h3>
+      <div id="leftKeys"></div>
+    </div>
+    <div class="group">
+      <h3>Right hand</h3>
+      <div id="rightKeys"></div>
+    </div>
+  </div>
+
+  <button id="camToggle">📷 Show camera</button>
+
+  <div id="start" class="panel">
+    <h1>AIR <span>KEYS</span></h1>
+    <p class="sub">Play music in the air with your hands.</p>
+    <ul>
+      <li>✋ Open palm = silence</li>
+      <li>🤏 Curl a finger = play its note</li>
+      <li>✊ Fist = chord</li>
+      <li>↕️ Hand up = louder, hand down = quieter</li>
+    </ul>
+    <button id="startBtn">▶ Start Air Keys</button>
+    <p id="status"></p>
+    <p class="tiny">Your camera stays on your device. Nothing is recorded or uploaded.</p>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   AIR KEYS - play music in the air with your hands
+   ============================================================ */
+
+const video        = document.getElementById("cam");
+const canvas       = document.getElementById("stage");
+const ctx          = canvas.getContext("2d");
+const startPanel   = document.getElementById("start");
+const startBtn     = document.getElementById("startBtn");
+const statusEl     = document.getElementById("status");
+const camToggle    = document.getElementById("camToggle");
+const nowPlayingEl = document.getElementById("nowPlaying");
+
+const SWAP_HANDS  = false;
+const THUMB_LIMIT = 0.55;
+const CHORD_IDX   = [0, 2, 3];
+
+const FINGER_NAMES  = ["Thumb", "Index", "Middle", "Ring", "Pinky"];
+const FINGER_COLORS = ["#ff4d8d", "#00e5ff", "#5dff8f", "#ffd84d", "#b88cff"];
+const TIPS = [4, 8, 12, 16, 20];
+const PIPS = [3, 6, 10, 14, 18];
+
+const NOTE_NAMES = ["C", "D", "E", "G", "A"];
+const SCALE      = [0, 2, 4, 7, 9];
+const BASE_MIDI  = { left: 48, right: 60 };
+const OCTAVE     = { left: 3, right: 4 };
+
+const CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],
+  [0,17]
+];
+
+let W, H;
+function resize() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener("resize", resize);
+resize();
+
+let aspect = 16 / 9;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function dist(a, b) {
+  return Math.hypot((a.x - b.x) * aspect, a.y - b.y);
+}
+
+function fingerOf(i) {
+  return i === 0 ? -1 : Math.floor((i - 1) / 4);
+}
+
+function pitchIndex(side, finger) {
+  return side === "left" ? 4 - finger : finger;
+}
+
+function noteByIndex(side, idx) {
+  const midi = BASE_MIDI[side] + SCALE[idx];
+  return {
+    freq: 440 * Math.pow(2, (midi - 69) / 12),
+    name: NOTE_NAMES[idx] + OCTAVE[side]
+  };
+}
+
+function buildKeys() {
+  ["left", "right"].forEach(side => {
+    const box = document.getElementById(side + "Keys");
+    const order = side === "left" ? [4, 3, 2, 1, 0] : [0, 1, 2, 3, 4];
+    order.forEach(f => {
+      const n = noteByIndex(side, pitchIndex(side, f));
+      const el = document.createElement("div");
+      el.className = "key";
+      el.dataset.id = side + "-" + f;
+      el.style.setProperty("--c", FINGER_COLORS[f]);
+      el.innerHTML = "<b>" + n.name + "</b><span>" + FINGER_NAMES[f] + "</span>";
+      box.appendChild(el);
+    });
+  });
+}
+buildKeys();
+
+let audioCtx = null, master = null, analyser = null, waveData = null;
+const voices = {};
+
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const comp = audioCtx.createDynamicsCompressor();
+  master = audioCtx.createGain();
+  master.gain.value = 0.9;
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  waveData = new Uint8Array(analyser.fftSize);
+  master.connect(comp);
+  comp.connect(analyser);
+  analyser.connect(audioCtx.destination);
+}
+
+function startVoice(id, freq, vol) {
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = "triangle";
+  osc.frequency.value = freq;
+  gain.gain.value = 0;
+  osc.connect(gain);
+  gain.connect(master);
+  osc.start();
+  gain.gain.setTargetAtTime(vol * 0.22, audioCtx.currentTime, 0.02);
+  voices[id] = { osc, gain };
+}
+
+function setVoiceVolume(id, vol) {
+  voices[id].gain.gain.setTargetAtTime(vol * 0.22, audioCtx.currentTime, 0.05);
+}
+
+function stopVoice(id) {
+  const v = voices[id];
+  if (!v) return;
+  delete voices[id];
+  v.gain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.06);
+  v.osc.stop(audioCtx.currentTime + 0.4);
+}
+
+const particles = [];
+function spawnParticles(x, y, color, n = 14) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = Math.random() * 3 + 1;
+    particles.push({
+      x, y,
+      vx: Math.cos(a) * s,
+      vy: Math.sin(a) * s - 1,
+      life: 1,
+      size: Math.random() * 4 + 2,
+      color
+    });
+  }
+}
+
+let ready = false;
+let trackedHands = [];
+const curlState = { left: [false,false,false,false,false], right: [false,false,false,false,false] };
+const volSmooth = { left: 0.5, right: 0.5 };
+
+function onResults(results) {
+  if (!ready) {
+    ready = true;
+    startPanel.classList.add("hidden");
+  }
+
+  const lms    = results.multiHandLandmarks || [];
+  const labels = results.multiHandedness || [];
+
+  const list = lms.map((lm, i) => {
+    const label = labels[i] ? labels[i].label : "Right";
+    let side = label === "Right" ? "left" : "right";
+    if (SWAP_HANDS) side = side === "left" ? "right" : "left";
+    return { lm, side };
+  });
+
+  if (list.length === 2 && list[0].side === list[1].side) {
+    list.sort((a, b) => (1 - a.lm[0].x) - (1 - b.lm[0].x));
+    list[0].side = "left";
+    list[1].side = "right";
+  }
+
+  const desired = {};
+  const lit     = new Set();
+  const names   = [];
+  let anyChord  = false;
+  const seen    = { left: false, right: false };
+  trackedHands  = [];
+
+  list.forEach(h => {
+    const side = h.side;
+    const lm   = h.lm;
+    seen[side] = true;
+
+    const rawVol = clamp((0.95 - lm[9].y) / 0.75, 0.05, 1);
+    volSmooth[side] += (rawVol - volSmooth[side]) * 0.35;
+    const vol = volSmooth[side];
+
+    const size  = dist(lm[0], lm[9]);
+    const state = curlState[side];
+    for (let f = 0; f < 5; f++) {
+      let on;
+      if (f === 0) {
+        const r = dist(lm[4], lm[9]) / size;
+        on = state[0] ? r < THUMB_LIMIT + 0.1 : r < THUMB_LIMIT;
+      } else {
+        const r = dist(lm[TIPS[f]], lm[0]) / dist(lm[PIPS[f]], lm[0]);
+        on = state[f] ? r < 1.1 : r < 0.95;
+      }
+      state[f] = on;
+    }
+
+    const px = i => (1 - lm[i].x) * W;
+    const py = i => lm[i].y * H;
+
+    if (state.every(Boolean)) {
+      anyChord = true;
+      CHORD_IDX.forEach(idx => {
+        const n = noteByIndex(side, idx);
+        desired[side + "-chord-" + idx] = { freq: n.freq, vol, x: px(9), y: py(9), color: "#ffffff" };
+        names.push(n.name);
+      });
+      for (let f = 0; f < 5; f++) lit.add(side + "-" + f);
+    } else {
+      for (let f = 0; f < 5; f++) {
+        if (state[f]) {
+          const n = noteByIndex(side, pitchIndex(side, f));
+          desired[side + "-" + f] = { freq: n.freq, vol, x: px(TIPS[f]), y: py(TIPS[f]), color: FINGER_COLORS[f] };
+          names.push(n.name);
+          lit.add(side + "-" + f);
+        }
+      }
+    }
+
+    trackedHands.push({ lm, side, vol, state: state.slice() });
+  });
+
+  ["left", "right"].forEach(s => {
+    if (!seen[s]) curlState[s] = [false, false, false, false, false];
+  });
+
+  for (const id in voices) {
+    if (!desired[id]) stopVoice(id);
+  }
+  for (const id in desired) {
+    const d = desired[id];
+    if (!voices[id]) {
+      startVoice(id, d.freq, d.vol);
+      spawnParticles(d.x, d.y, d.color);
+    } else {
+      setVoiceVolume(id, d.vol);
+    }
+  }
+
+  document.querySelectorAll(".key").forEach(el => {
+    el.classList.toggle("on", lit.has(el.dataset.id));
+  });
+  nowPlayingEl.textContent = names.length
+    ? (anyChord ? "CHORD  " : "") + names.join("  ")
+    : "—";
+}
+
+let showCam = false;
+let glow = 0;
+
+camToggle.addEventListener("click", () => {
+  showCam = !showCam;
+  camToggle.textContent = showCam ? "📷 Hide camera" : "📷 Show camera";
+});
+
+function draw() {
+  let level = 0;
+  if (analyser) {
+    analyser.getByteTimeDomainData(waveData);
+    let sum = 0;
+    for (let i = 0; i < waveData.length; i++) {
+      const v = (waveData[i] - 128) / 128;
+      sum += v * v;
+    }
+    level = Math.sqrt(sum / waveData.length);
+  }
+  glow += (level - glow) * 0.2;
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#05050f";
+  ctx.fillRect(0, 0, W, H);
+
+  const bg = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.7);
+  bg.addColorStop(0, "rgba(123,47,247," + Math.min(0.8, 0.15 + glow * 1.5) + ")");
+  bg.addColorStop(1, "rgba(5,5,15,0)");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  if (showCam && video.videoWidth) {
+    ctx.save();
+    ctx.globalAlpha = 0.25;
+    ctx.translate(W, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, W, H);
+    ctx.restore();
+  }
+
+  trackedHands.forEach(h => {
+    const P = h.lm.map(p => ({ x: (1 - p.x) * W, y: p.y * H }));
+    ctx.lineCap = "round";
+
+    CONNECTIONS.forEach(([a, b]) => {
+      const fa = fingerOf(a), fb = fingerOf(b);
+      const color = (fa === fb && fa >= 0) ? FINGER_COLORS[fa] : "rgba(255,255,255,0.55)";
+      ctx.strokeStyle = color;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 14;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(P[a].x, P[a].y);
+      ctx.lineTo(P[b].x, P[b].y);
+      ctx.stroke();
+    });
+
+    P.forEach((p, i) => {
+      const f = fingerOf(i);
+      const color = f >= 0 ? FINGER_COLORS[f] : "#ffffff";
+      const isTip = TIPS.includes(i);
+      const playing = isTip && h.state[f];
+      ctx.shadowColor = color;
+      ctx.shadowBlur = playing ? 35 : 10;
+      ctx.fillStyle = playing ? "#ffffff" : color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, playing ? 14 : (isTip ? 7 : 4), 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    ctx.shadowBlur = 0;
+    const minY = Math.min(...P.map(p => p.y));
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 16px Segoe UI, Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(
+      (h.side === "left" ? "LEFT" : "RIGHT") + " · VOL " + Math.round(h.vol * 100) + "%",
+      P[9].x, Math.max(24, minY - 28)
+    );
+  });
+  ctx.shadowBlur = 0;
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= 0.025;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = "rgba(255,255,255,0.03)";
+  ctx.fillRect(0, H - 140, W, 140);
+
+  const mid = H - 70;
+  const lineGrad = ctx.createLinearGradient(0, 0, W, 0);
+  lineGrad.addColorStop(0, "#00e5ff");
+  lineGrad.addColorStop(1, "#ff2bd6");
+  ctx.strokeStyle = lineGrad;
+  ctx.shadowColor = "#00e5ff";
+  ctx.shadowBlur = 18;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  if (analyser) {
+    for (let i = 0; i < waveData.length; i++) {
+      const x = (i / (waveData.length - 1)) * W;
+      const y = clamp(mid + ((waveData[i] - 128) / 128) * 270, H - 135, H - 5);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+  } else {
+    ctx.moveTo(0, mid);
+    ctx.lineTo(W, mid);
+  }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+startBtn.addEventListener("click", async () => {
+  statusEl.textContent = "Starting camera and loading hand tracker (can take ~10 seconds)...";
+
+  if (typeof Hands === "undefined" || typeof Camera === "undefined") {
+    statusEl.textContent = "Could not load the hand-tracking library. Check your internet or try a phone hotspot.";
+    return;
+  }
+
+  try {
+    initAudio();
+    await audioCtx.resume();
+
+    const handTracker = new Hands({
+      locateFile: file => "https://cdn.jsdelivr.net/npm/@mediapipe/hands/" + file
+    });
+    handTracker.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.6
+    });
+    handTracker.onResults(onResults);
+
+    const camera = new Camera(video, {
+      onFrame: async () => {
+        if (video.videoWidth) aspect = video.videoWidth / video.videoHeight;
+        await handTracker.send({ image: video });
+      },
+      width: 1280,
+      height: 720
+    });
+    await camera.start();
+  } catch (err) {
+  console.error("Air Keys error:", err);
+
+  if (err.name === "NotAllowedError") {
+    statusEl.textContent =
+      "Camera access denied. Allow camera access in your browser settings.";
+  } else if (err.name === "NotFoundError") {
+    statusEl.textContent =
+      "No camera found. Connect a camera and try again.";
+  } else if (err.name === "NotReadableError") {
+    statusEl.textContent =
+      "Camera is busy. Close other apps using it and retry.";
+  } else {
+    statusEl.textContent =
+      "Could not start: " + err.message;
+  }
+}
+});
+</script>
+</body>
+</html>
